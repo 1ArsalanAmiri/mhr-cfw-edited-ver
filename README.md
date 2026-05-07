@@ -190,4 +190,5 @@ Browse `https://httpbin.org/ip` through the proxy — you should see the **VPS's
 ---
 
 ## Sources for this project
+- https://github.com/1ArsalanAmiri/mhr-cfw-edited-ver
 - https://github.com/masterking32/MasterHttpRelayVPN
