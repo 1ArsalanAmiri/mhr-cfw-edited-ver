@@ -1,11 +1,8 @@
-# MHR-CFW - MITM Domain-Fronted HTTP Relay + Cloudflare Worker Exit
+# MHR-CFW - MITM Domain-Fronted HTTP Relay + Cloudflare Worker Exit (ARSALAN'S FORK VERSION EDITED)
 
+
+[![GitHub](https://img.shields.io/badge/GitHub-Arsalans_Version_FORK-green?logo=github)](https://github.com/1ArsalanAmiri/mhr-cfw-edited-ver)
 [![GitHub](https://img.shields.io/badge/GitHub-MHR_CFW-red?logo=github)](https://github.com/denuitt1/mhr-cfw)
-
-
-| [English](README.md) | [Persian](README_FA.md) |
-| :---: | :---: |
-
 ---
 
 ## How It Works
