@@ -1,4 +1,4 @@
-// Google Apps Script File
+// Google Apps Script
 
 const AUTH_KEY = "YOUR_AUTH_KEY";
 const WORKER_URL = "APP_SCRIPT_DEPLOYMENT_ID";
@@ -128,6 +128,7 @@ function _json(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+<<<<<<< HEAD:script/Code.gs
 }
 
 
@@ -257,3 +258,6 @@ function _json(obj) {
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
+=======
+}
+>>>>>>> upstream/main:deploy/gas/Code.gs

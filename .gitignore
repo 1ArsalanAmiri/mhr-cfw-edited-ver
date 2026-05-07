@@ -1,10 +1,12 @@
-# Secrets & user config
-config.json
+# ignore secrets and user config
 .env
-
-# CA certificates (generated at runtime, contain private keys)
+config.json
 ca/
-cert/
+
+# ignore python venv
+.venv/
+venv/
+env/
 
 # Python
 __pycache__/
@@ -15,11 +17,7 @@ __pycache__/
 dist/
 build/
 *.egg
-
-# Virtual environments
-venv/
-.venv/
-env/
+*.spec
 
 # IDE
 .vscode/

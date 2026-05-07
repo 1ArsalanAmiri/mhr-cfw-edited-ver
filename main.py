@@ -29,6 +29,10 @@ from mitm import CA_CERT_FILE
 from proxy_server import ProxyServer
 
 
+# Enable Proxy Setter script 
+from proxy_setter import setup_proxy
+
+
 def setup_logging(level_name: str):
     configure_logging(level_name)
 
@@ -310,6 +314,12 @@ async def _run(config):
     _log = logging.getLogger("asyncio")
     loop.set_exception_handler(_make_exception_handler(_log))
     server = ProxyServer(config)
+        
+    # Enable the proxy for lan settings (ADDED BY ME "github.com/1ArsalanAmiri")
+    setup_proxy()
+    _log.info("Program started. Proxy is ENABLED.\nWill be DISABLED if script crashes or stopped.")
+    
+
     try:
         await server.start()
     finally:
