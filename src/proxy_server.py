@@ -43,6 +43,9 @@ from constants import (
 )
 from domain_fronter import DomainFronter
 
+# ── Import request counter ──────────────────────────────────────────
+from request_counter import counter
+
 log = logging.getLogger("Proxy")
 
 
@@ -87,81 +90,6 @@ def _has_unsupported_transfer_encoding(header_block: bytes) -> bool:
     return False
 
 
-class ResponseCache:
-    """Simple LRU response cache — avoids repeated relay calls."""
-
-    def __init__(self, max_mb: int = 50):
-        self._store: dict[str, tuple[bytes, float]] = {}
-        self._size = 0
-        self._max = max_mb * 1024 * 1024
-        self.hits = 0
-        self.misses = 0
-
-    def get(self, url: str) -> bytes | None:
-        entry = self._store.get(url)
-        if not entry:
-            self.misses += 1
-            return None
-        raw, expires = entry
-        if time.time() > expires:
-            self._size -= len(raw)
-            del self._store[url]
-            self.misses += 1
-            return None
-        self.hits += 1
-        return raw
-
-    def put(self, url: str, raw_response: bytes, ttl: int = 300):
-        size = len(raw_response)
-        if size > self._max // 4 or size == 0:
-            return
-        # Evict oldest to make room
-        while self._size + size > self._max and self._store:
-            oldest = next(iter(self._store))
-            self._size -= len(self._store[oldest][0])
-            del self._store[oldest]
-        if url in self._store:
-            self._size -= len(self._store[url][0])
-        self._store[url] = (raw_response, time.time() + ttl)
-        self._size += size
-
-    @staticmethod
-    def parse_ttl(raw_response: bytes, url: str) -> int:
-        """Determine cache TTL from response headers and URL."""
-        hdr_end = raw_response.find(b"\r\n\r\n")
-        if hdr_end < 0:
-            return 0
-        hdr = raw_response[:hdr_end].decode(errors="replace").lower()
-
-        # Don't cache errors or non-200
-        if b"HTTP/1.1 200" not in raw_response[:20]:
-            return 0
-        if "no-store" in hdr or "private" in hdr or "set-cookie:" in hdr:
-            return 0
-
-        # Explicit max-age
-        m = re.search(r"max-age=(\d+)", hdr)
-        if m:
-            return min(int(m.group(1)), CACHE_TTL_MAX)
-
-        # Heuristic by content type / extension
-        path = url.split("?")[0].lower()
-        for ext in STATIC_EXTS:
-            if path.endswith(ext):
-                return CACHE_TTL_STATIC_LONG
-
-        ct_m = re.search(r"content-type:\s*([^\r\n]+)", hdr)
-        ct = ct_m.group(1) if ct_m else ""
-        if "image/" in ct or "font/" in ct:
-            return CACHE_TTL_STATIC_LONG
-        if "text/css" in ct or "javascript" in ct:
-            return CACHE_TTL_STATIC_MED
-        if "text/html" in ct or "application/json" in ct:
-            return 0  # don't cache dynamic content by default
-
-        return 0
-
-
 class ProxyServer:
     # Pulled from constants.py so users can override any subset via config.
     _GOOGLE_DIRECT_EXACT_EXCLUDE  = GOOGLE_DIRECT_EXACT_EXCLUDE
@@ -193,7 +121,6 @@ class ProxyServer:
             )
         self.fronter = DomainFronter(config)
         self.mitm = None
-        self._cache = ResponseCache(max_mb=CACHE_MAX_MB)
         self._direct_fail_until: dict[str, float] = {}
         self._servers: list[asyncio.base_events.Server] = []
         self._client_tasks: set[asyncio.Task] = set()
@@ -367,12 +294,8 @@ class ProxyServer:
 
     def _cache_allowed(self, method: str, url: str,
                        headers: dict | None, body: bytes) -> bool:
-        if method.upper() != "GET" or body:
-            return False
-        for name in UNCACHEABLE_HEADER_NAMES:
-            if self._header_value(headers, name):
-                return False
-        return self.fronter._is_static_asset_url(url)
+        # Cache disabled for simplicity
+        return False
 
     @classmethod
     def _should_trace_host(cls, host: str) -> bool:
@@ -1216,6 +1139,11 @@ class ProxyServer:
 
                 log.info("MITM → %s %s", method, url)
 
+                # 📊 INCREMENT REQUEST COUNTER 📊
+                counter.increment()
+                if counter.get_today_count() % 30 == 0:
+                    counter.show_status()
+
                 # ── CORS: extract relevant request headers ─────────────
                 origin = self._header_value(headers, "origin")
                 acr_method = self._header_value(
@@ -1243,33 +1171,18 @@ class ProxyServer:
                 if await self._maybe_stream_download(method, url, headers, body, writer):
                     continue
 
-                # Check local cache first (GET only)
-                response = None
-                if self._cache_allowed(method, url, headers, body):
-                    response = self._cache.get(url)
-                    if response:
-                        log.debug("Cache HIT: %s", url[:60])
-
-                if response is None:
-                    # Relay through Apps Script
-                    try:
-                        response = await self._relay_smart(method, url, headers, body)
-                    except Exception as e:
-                        log.error("Relay error (%s): %s", url[:60], e)
-                        err_body = f"Relay error: {e}".encode()
-                        response = (
-                            b"HTTP/1.1 502 Bad Gateway\r\n"
-                            b"Content-Type: text/plain\r\n"
-                            b"Content-Length: " + str(len(err_body)).encode() + b"\r\n"
-                            b"\r\n" + err_body
-                        )
-
-                    # Cache successful GET responses
-                    if self._cache_allowed(method, url, headers, body) and response:
-                        ttl = ResponseCache.parse_ttl(response, url)
-                        if ttl > 0:
-                            self._cache.put(url, response, ttl)
-                            log.debug("Cached (%ds): %s", ttl, url[:60])
+                # Relay through Apps Script (no cache)
+                try:
+                    response = await self._relay_smart(method, url, headers, body)
+                except Exception as e:
+                    log.error("Relay error (%s): %s", url[:60], e)
+                    err_body = f"Relay error: {e}".encode()
+                    response = (
+                        b"HTTP/1.1 502 Bad Gateway\r\n"
+                        b"Content-Type: text/plain\r\n"
+                        b"Content-Length: " + str(len(err_body)).encode() + b"\r\n"
+                        b"\r\n" + err_body
+                    )
 
                 # Inject permissive CORS headers whenever the browser sent
                 # an Origin (cross-origin XHR / fetch). Without this, the
@@ -1441,6 +1354,11 @@ class ProxyServer:
         first_line = header_block.split(b"\r\n")[0].decode(errors="replace")
         log.info("HTTP → %s", first_line)
 
+        # 📊 INCREMENT REQUEST COUNTER 📊
+        counter.increment()
+        if counter.get_today_count() % 30 == 0:
+            counter.show_status()
+
         # Parse request and relay through Apps Script
         parts = first_line.strip().split(" ", 2)
         method = parts[0] if parts else "GET"
@@ -1467,20 +1385,8 @@ class ProxyServer:
         if await self._maybe_stream_download(method, url, headers, body, writer):
             return
 
-        # Cache check for GET
-        response = None
-        if self._cache_allowed(method, url, headers, body):
-            response = self._cache.get(url)
-            if response:
-                log.debug("Cache HIT (HTTP): %s", url[:60])
-
-        if response is None:
-            response = await self._relay_smart(method, url, headers, body)
-            # Cache successful GET
-            if self._cache_allowed(method, url, headers, body) and response:
-                ttl = ResponseCache.parse_ttl(response, url)
-                if ttl > 0:
-                    self._cache.put(url, response, ttl)
+        # Relay through Apps Script (no cache)
+        response = await self._relay_smart(method, url, headers, body)
 
         if origin and response:
             response = self._inject_cors_headers(response, origin)
